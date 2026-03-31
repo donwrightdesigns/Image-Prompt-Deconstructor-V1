@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "PromptHistory": {
+      "title": "Prompt History",
+      "description": "A record of a generated style prompt.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The user ID of the person who generated the prompt."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The generated AI prompt text."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["single", "essence"],
+          "description": "The mode used to generate the prompt."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The timestamp when the prompt was generated."
+        },
+        "thumbnailUrls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "A list of thumbnail URLs for the images used to generate the prompt (optional, for history display)."
+        }
+      },
+      "required": ["uid", "prompt", "mode", "createdAt"]
+    }
+  },
+  "firestore": {
+    "prompts": {
+      "schema": "PromptHistory",
+      "description": "A collection of generated style prompts."
+    }
+  }
+}
