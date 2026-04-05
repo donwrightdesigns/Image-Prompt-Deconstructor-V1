@@ -2,24 +2,48 @@
 
 import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
-import { Upload, Sparkles, Copy, Check, Image as ImageIcon, Loader2, History, LogIn, LogOut, Trash2 } from 'lucide-react';
+import { Upload, Sparkles, Copy, Check, Image as ImageIcon, Loader2, History, LogIn, LogOut, Trash2, Camera, Zap, MapPin, Info, Search } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { getGeminiModel } from '@/lib/gemini';
 import { auth, db, googleProvider, signInWithPopup, signOut, onAuthStateChanged, collection, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, User } from '@/firebase';
+import { Type } from "@google/genai";
+import EXIF from 'exif-js';
 
 interface HistoryItem {
   id: string;
   prompt: string;
-  mode: 'single' | 'essence';
+  mode: 'single' | 'essence' | 'blueprint';
   createdAt: any;
   thumbnailUrls?: string[];
 }
 
+interface BlueprintData {
+  optics?: {
+    focalLength?: string;
+    aperture?: string;
+    shutterSpeed?: string;
+    iso?: string;
+  };
+  lighting?: {
+    setup?: string;
+    keyLight?: string;
+    fillLight?: string;
+    modifiers?: string;
+  };
+  environment?: {
+    location?: string;
+    timeOfDay?: string;
+    atmosphere?: string;
+  };
+  technicalNotes?: string;
+}
+
 export default function StyleAnalyzer() {
   const [images, setImages] = useState<string[]>([]);
-  const [mode, setMode] = useState<'single' | 'essence'>('single');
+  const [mode, setMode] = useState<'single' | 'essence' | 'blueprint'>('single');
   const [analyzing, setAnalyzing] = useState(false);
   const [prompt, setPrompt] = useState<string | null>(null);
+  const [blueprint, setBlueprint] = useState<BlueprintData | null>(null);
   const [copied, setCopied] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [user, setUser] = useState<User | null>(null);
@@ -81,12 +105,13 @@ export default function StyleAnalyzer() {
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
-        if (mode === 'single') {
+        if (mode === 'single' || mode === 'blueprint') {
           setImages([result]);
         } else {
           setImages(prev => [...prev, result].slice(-4)); // Limit to 4 for performance/context
         }
         setPrompt(null);
+        setBlueprint(null);
       };
       reader.readAsDataURL(file);
     });
@@ -112,14 +137,41 @@ export default function StyleAnalyzer() {
     if (e.dataTransfer.files) processFiles(e.dataTransfer.files);
   };
 
+  const extractExif = (base64: string): Promise<any> => {
+    return new Promise((resolve) => {
+      try {
+        // Convert base64 to blob
+        const byteString = atob(base64.split(',')[1]);
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([ab], { type: 'image/jpeg' });
+        
+        // Use EXIF.getData with arrow function to avoid 'this' warning
+        EXIF.getData(blob as any, () => {
+          const allMetaData = EXIF.getAllTags(blob);
+          resolve(allMetaData);
+        });
+      } catch (e) {
+        console.error("EXIF Extraction Error:", e);
+        resolve(null);
+      }
+    });
+  };
+
   const removeImage = (index: number) => {
     setImages(prev => prev.filter((_, i) => i !== index));
     setPrompt(null);
+    setBlueprint(null);
   };
 
   const analyzeStyle = async () => {
     if (images.length === 0) return;
     setAnalyzing(true);
+    setPrompt(null);
+    setBlueprint(null);
     try {
       const ai = getGeminiModel();
       
@@ -130,9 +182,69 @@ export default function StyleAnalyzer() {
         }
       }));
 
-      const systemPrompt = mode === 'single' 
-        ? "Analyze this image and reverse-engineer a highly detailed prompt that would allow an AI image generator to replicate this exact style, lighting, composition, and subject matter. Focus on technical terms like camera angle, lighting type, color palette, and artistic style. Return only the prompt text."
-        : "Analyze these multiple images to extract their common 'Style Essence'. Identify the recurring qualitative elements: the specific color grading, lighting patterns, texture, artistic medium, and emotional mood that binds them together. Create a reusable 'Style Prompt' that can be applied to ANY new subject to give it this exact look. Focus on the 'how' (style) rather than the 'what' (subject). Return only the prompt text.";
+      let systemPrompt = "";
+      let config: any = {};
+      let exifData = null;
+
+      if (mode === 'blueprint') {
+        // Step 1: Try EXIF analysis
+        exifData = await extractExif(images[0]);
+        const exifString = exifData ? JSON.stringify(exifData) : "No EXIF data found in image file.";
+
+        systemPrompt = `You are a master cinematographer and professional photographer. Analyze this image and provide a thorough technical and quantitative breakdown of how it was created. 
+        
+        STEP 1: EXIF DATA ANALYSIS
+        The following EXIF data was extracted from the file: ${exifString}
+        
+        STEP 2: WEB SEARCH FALLBACK
+        If the EXIF data is missing or incomplete, use Google Search to see if this image exists online and if there is any technical information associated with it (e.g., from photography portfolios, stock sites, or articles).
+        
+        STEP 3: PROFESSIONAL INFERENCE
+        Based on the visual evidence and any found data, provide estimated camera settings (aperture, shutter speed, ISO, focal length), a detailed lighting setup analysis (key, fill, rim, modifiers), and environmental context (location, time, atmosphere).
+        
+        Return the analysis in a structured JSON format.`;
+
+        config = {
+          responseMimeType: "application/json",
+          tools: [{ googleSearch: {} }],
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              optics: {
+                type: Type.OBJECT,
+                properties: {
+                  focalLength: { type: Type.STRING },
+                  aperture: { type: Type.STRING },
+                  shutterSpeed: { type: Type.STRING },
+                  iso: { type: Type.STRING }
+                }
+              },
+              lighting: {
+                type: Type.OBJECT,
+                properties: {
+                  setup: { type: Type.STRING },
+                  keyLight: { type: Type.STRING },
+                  fillLight: { type: Type.STRING },
+                  modifiers: { type: Type.STRING }
+                }
+              },
+              environment: {
+                type: Type.OBJECT,
+                properties: {
+                  location: { type: Type.STRING },
+                  timeOfDay: { type: Type.STRING },
+                  atmosphere: { type: Type.STRING }
+                }
+              },
+              technicalNotes: { type: Type.STRING }
+            }
+          }
+        };
+      } else if (mode === 'single') {
+        systemPrompt = "Analyze this image and reverse-engineer a highly detailed prompt that would allow an AI image generator to replicate this exact style, lighting, composition, and subject matter. Focus on technical terms like camera angle, lighting type, color palette, and artistic style. Return only the prompt text.";
+      } else if (mode === 'essence') {
+        systemPrompt = "Analyze these multiple images to extract their common 'Style Essence'. Identify the recurring qualitative elements: the specific color grading, lighting patterns, texture, artistic medium, and emotional mood that binds them together. Create a reusable 'Style Prompt' that can be applied to ANY new subject to give it this exact look. Focus on the 'how' (style) rather than the 'what' (subject). Return only the prompt text.";
+      }
 
       const response = await ai.models.generateContent({
         model: "gemini-3.1-pro-preview",
@@ -143,21 +255,35 @@ export default function StyleAnalyzer() {
               { text: systemPrompt }
             ]
           }
-        ]
+        ],
+        config
       });
 
-      const generatedPrompt = response.text || "Could not generate prompt.";
-      setPrompt(generatedPrompt);
+      if (mode === 'blueprint') {
+        try {
+          const data = JSON.parse(response.text || "{}");
+          setBlueprint(data);
+          // For history, we'll store a summary string
+          const summary = `Photo Blueprint: ${data.optics?.focalLength || 'Unknown'} @ ${data.optics?.aperture || 'Unknown'}`;
+          setPrompt(summary);
+        } catch (e) {
+          console.error("JSON Parse Error:", e);
+          setPrompt("Error parsing technical data.");
+        }
+      } else {
+        const generatedPrompt = response.text || "Could not generate prompt.";
+        setPrompt(generatedPrompt);
+      }
 
       // Save to history if user is logged in
       if (user && response.text) {
         try {
           await addDoc(collection(db, 'prompts'), {
             uid: user.uid,
-            prompt: generatedPrompt,
+            prompt: mode === 'blueprint' ? response.text : response.text, // Store full JSON for blueprint
             mode,
             createdAt: serverTimestamp(),
-            thumbnailUrls: images.slice(0, 4) // Store thumbnails (base64 for now, ideally storage)
+            thumbnailUrls: images.slice(0, 4)
           });
         } catch (e) {
           console.error("Error saving to history:", e);
@@ -218,16 +344,22 @@ export default function StyleAnalyzer() {
         <div className="flex items-center justify-center gap-4">
           <div className="flex items-center p-1 bg-zinc-100 rounded-xl w-fit">
             <button
-              onClick={() => { setMode('single'); setImages([]); setPrompt(null); }}
+              onClick={() => { setMode('single'); setImages(prev => prev.slice(0, 1)); setPrompt(null); setBlueprint(null); }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'single' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
             >
               Single Deconstructor
             </button>
             <button
-              onClick={() => { setMode('essence'); setImages([]); setPrompt(null); }}
+              onClick={() => { setMode('essence'); setPrompt(null); setBlueprint(null); }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'essence' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
             >
               Style Essence (Multi)
+            </button>
+            <button
+              onClick={() => { setMode('blueprint'); setImages(prev => prev.slice(0, 1)); setPrompt(null); setBlueprint(null); }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'blueprint' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+            >
+              Photo Blueprint
             </button>
           </div>
 
@@ -262,7 +394,18 @@ export default function StyleAnalyzer() {
                     key={item.id} 
                     className="bg-white border border-zinc-200 rounded-xl p-4 space-y-3 hover:border-zinc-300 transition-all cursor-pointer group"
                     onClick={() => {
-                      setPrompt(item.prompt);
+                      if (item.mode === 'blueprint') {
+                        try {
+                          const data = JSON.parse(item.prompt);
+                          setBlueprint(data);
+                          setPrompt(`Photo Blueprint: ${data.optics?.focalLength || 'Unknown'}`);
+                        } catch (e) {
+                          setPrompt(item.prompt);
+                        }
+                      } else {
+                        setPrompt(item.prompt);
+                        setBlueprint(null);
+                      }
                       setMode(item.mode);
                       setShowHistory(false);
                     }}
@@ -333,7 +476,9 @@ export default function StyleAnalyzer() {
               <label className="cursor-pointer flex flex-col items-center space-y-2 p-12 text-center w-full h-full justify-center">
                 <Upload className="w-10 h-10 text-zinc-400" />
                 <span className="text-sm font-medium text-zinc-600">
-                  {mode === 'single' ? 'Click to upload or drag and drop' : 'Upload up to 4 style examples'}
+                  {mode === 'single' ? 'Click to upload or drag and drop' : 
+                   mode === 'blueprint' ? 'Upload a photo for technical analysis' :
+                   'Upload up to 4 style examples'}
                 </span>
                 <span className="text-xs text-zinc-400">JPG, PNG or WebP</span>
                 <input type="file" className="hidden" onChange={handleUpload} accept="image/*" multiple={mode === 'essence'} />
@@ -349,12 +494,12 @@ export default function StyleAnalyzer() {
             {analyzing ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                <span>{mode === 'single' ? 'Analyzing Style...' : 'Extracting Essence...'}</span>
+                <span>{mode === 'single' ? 'Analyzing Style...' : mode === 'blueprint' ? 'Generating Blueprint...' : 'Extracting Essence...'}</span>
               </>
             ) : (
               <>
                 <Sparkles className="w-5 h-5" />
-                <span>{mode === 'single' ? 'Reverse Engineer Prompt' : 'Extract Style Essence'}</span>
+                <span>{mode === 'single' ? 'Reverse Engineer Prompt' : mode === 'blueprint' ? 'Generate Photo Blueprint' : 'Extract Style Essence'}</span>
               </>
             )}
           </button>
@@ -364,8 +509,10 @@ export default function StyleAnalyzer() {
         <div className="space-y-4">
           <div className="h-full min-h-[300px] rounded-2xl bg-zinc-50 border border-zinc-200 p-6 relative flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">Generated Prompt</h2>
-              {prompt && (
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">
+                {mode === 'blueprint' ? 'Technical Breakdown' : 'Generated Prompt'}
+              </h2>
+              {prompt && mode !== 'blueprint' && (
                 <button 
                   onClick={copyToClipboard}
                   className="text-zinc-500 hover:text-zinc-900 transition-colors"
@@ -377,7 +524,100 @@ export default function StyleAnalyzer() {
             
             <div className="flex-1 font-mono text-sm leading-relaxed text-zinc-700">
               <AnimatePresence mode="wait">
-                {prompt ? (
+                {blueprint && mode === 'blueprint' ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    key="blueprint"
+                    className="space-y-4 font-sans"
+                  >
+                    <div className="grid grid-cols-1 gap-4">
+                      {/* Optics Box */}
+                      {blueprint.optics && (
+                        <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm space-y-2">
+                          <div className="flex items-center gap-2 text-zinc-900 font-bold">
+                            <Camera className="w-4 h-4 text-blue-500" />
+                            <h3>Optics & Settings</h3>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="bg-zinc-50 p-2 rounded">
+                              <span className="text-zinc-400 block mb-1">Focal Length</span>
+                              <span className="font-mono text-zinc-900">{blueprint.optics.focalLength || 'N/A'}</span>
+                            </div>
+                            <div className="bg-zinc-50 p-2 rounded">
+                              <span className="text-zinc-400 block mb-1">Aperture</span>
+                              <span className="font-mono text-zinc-900">{blueprint.optics.aperture || 'N/A'}</span>
+                            </div>
+                            <div className="bg-zinc-50 p-2 rounded">
+                              <span className="text-zinc-400 block mb-1">Shutter</span>
+                              <span className="font-mono text-zinc-900">{blueprint.optics.shutterSpeed || 'N/A'}</span>
+                            </div>
+                            <div className="bg-zinc-50 p-2 rounded">
+                              <span className="text-zinc-400 block mb-1">ISO</span>
+                              <span className="font-mono text-zinc-900">{blueprint.optics.iso || 'N/A'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Lighting Box */}
+                      {blueprint.lighting && (
+                        <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm space-y-2">
+                          <div className="flex items-center gap-2 text-zinc-900 font-bold">
+                            <Zap className="w-4 h-4 text-yellow-500" />
+                            <h3>Lighting Setup</h3>
+                          </div>
+                          <div className="space-y-2 text-xs">
+                            <div className="bg-zinc-50 p-2 rounded">
+                              <span className="text-zinc-400 block mb-1">Main Setup</span>
+                              <p className="text-zinc-700 leading-relaxed">{blueprint.lighting.setup || 'N/A'}</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="bg-zinc-50 p-2 rounded">
+                                <span className="text-zinc-400 block mb-1">Key Light</span>
+                                <p className="text-zinc-700">{blueprint.lighting.keyLight || 'N/A'}</p>
+                              </div>
+                              <div className="bg-zinc-50 p-2 rounded">
+                                <span className="text-zinc-400 block mb-1">Fill/Rim</span>
+                                <p className="text-zinc-700">{blueprint.lighting.fillLight || 'N/A'}</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Environment Box */}
+                      {blueprint.environment && (
+                        <div className="bg-white p-4 rounded-xl border border-zinc-200 shadow-sm space-y-2">
+                          <div className="flex items-center gap-2 text-zinc-900 font-bold">
+                            <MapPin className="w-4 h-4 text-emerald-500" />
+                            <h3>Environment</h3>
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 text-xs">
+                            <div className="bg-zinc-50 p-2 rounded">
+                              <span className="text-zinc-400 block mb-1">Context</span>
+                              <p className="text-zinc-700">{blueprint.environment.location}, {blueprint.environment.timeOfDay}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Notes Box */}
+                      {blueprint.technicalNotes && (
+                        <div className="bg-zinc-900 p-4 rounded-xl text-white space-y-2">
+                          <div className="flex items-center gap-2 font-bold">
+                            <Info className="w-4 h-4 text-zinc-400" />
+                            <h3>Technical Notes</h3>
+                          </div>
+                          <p className="text-xs text-zinc-300 leading-relaxed italic">
+                            &quot;{blueprint.technicalNotes}&quot;
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                ) : prompt ? (
                   <motion.p
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
