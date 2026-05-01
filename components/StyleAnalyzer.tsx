@@ -12,7 +12,7 @@ import EXIF from 'exif-js';
 interface HistoryItem {
   id: string;
   prompt: string;
-  mode: 'single' | 'essence' | 'blueprint';
+  mode: 'single' | 'essence' | 'blueprint' | 'enhance';
   createdAt: any;
   thumbnailUrls?: string[];
 }
@@ -40,7 +40,7 @@ interface BlueprintData {
 
 export default function StyleAnalyzer() {
   const [images, setImages] = useState<string[]>([]);
-  const [mode, setMode] = useState<'single' | 'essence' | 'blueprint'>('single');
+  const [mode, setMode] = useState<'single' | 'essence' | 'blueprint' | 'enhance'>('single');
   const [analyzing, setAnalyzing] = useState(false);
   const [prompt, setPrompt] = useState<string | null>(null);
   const [blueprint, setBlueprint] = useState<BlueprintData | null>(null);
@@ -49,6 +49,7 @@ export default function StyleAnalyzer() {
   const [user, setUser] = useState<User | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [quotaError, setQuotaError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -60,6 +61,7 @@ export default function StyleAnalyzer() {
   useEffect(() => {
     if (!user) {
       setHistory([]);
+      setQuotaError(null);
       return;
     }
 
@@ -75,8 +77,12 @@ export default function StyleAnalyzer() {
         ...doc.data()
       })) as HistoryItem[];
       setHistory(items);
+      setQuotaError(null);
     }, (error) => {
       console.error("Firestore Error:", error);
+      if (error.message.includes('Quota exceeded')) {
+        setQuotaError("You have reached the daily Firestore read quota. History will be unavailable until the quota resets tomorrow.");
+      }
     });
 
     return () => unsubscribe();
@@ -105,7 +111,7 @@ export default function StyleAnalyzer() {
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
-        if (mode === 'single' || mode === 'blueprint') {
+        if (mode === 'single' || mode === 'blueprint' || mode === 'enhance') {
           setImages([result]);
         } else {
           setImages(prev => [...prev, result].slice(-4)); // Limit to 4 for performance/context
@@ -242,6 +248,8 @@ export default function StyleAnalyzer() {
         };
       } else if (mode === 'single') {
         systemPrompt = "Analyze this image and reverse-engineer a highly detailed prompt that would allow an AI image generator to replicate this exact style, lighting, composition, and subject matter. Focus on technical terms like camera angle, lighting type, color palette, and artistic style. Return only the prompt text.";
+      } else if (mode === 'enhance') {
+        systemPrompt = "Analyze this image, find its flaws, or areas that could be improved, and generate a new text prompt to generate an enhanced, more successful, and aesthetically pleasing version of this photograph using an AI image generator. Tell the user what prompt to use to yield better results. Return only the prompt text.";
       } else if (mode === 'essence') {
         systemPrompt = "Analyze these multiple images to extract their common 'Style Essence'. Identify the recurring qualitative elements: the specific color grading, lighting patterns, texture, artistic medium, and emotional mood that binds them together. Create a reusable 'Style Prompt' that can be applied to ANY new subject to give it this exact look. Focus on the 'how' (style) rather than the 'what' (subject). Return only the prompt text.";
       }
@@ -356,6 +364,12 @@ export default function StyleAnalyzer() {
               Style Essence (Multi)
             </button>
             <button
+              onClick={() => { setMode('enhance'); setImages(prev => prev.slice(0, 1)); setPrompt(null); setBlueprint(null); }}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'enhance' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
+            >
+              Enhance Image
+            </button>
+            <button
               onClick={() => { setMode('blueprint'); setImages(prev => prev.slice(0, 1)); setPrompt(null); setBlueprint(null); }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'blueprint' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500 hover:text-zinc-700'}`}
             >
@@ -376,6 +390,19 @@ export default function StyleAnalyzer() {
       </header>
 
       <AnimatePresence>
+        {quotaError && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="bg-amber-50 text-amber-800 p-4 rounded-xl text-sm border border-amber-200 mt-4 flex items-center justify-between"
+          >
+            <p>{quotaError}</p>
+            <button onClick={() => setQuotaError(null)} className="text-amber-500 hover:text-amber-700">
+              <LogOut className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
         {showHistory && user && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
@@ -478,6 +505,7 @@ export default function StyleAnalyzer() {
                 <span className="text-sm font-medium text-zinc-600">
                   {mode === 'single' ? 'Click to upload or drag and drop' : 
                    mode === 'blueprint' ? 'Upload a photo for technical analysis' :
+                   mode === 'enhance' ? 'Upload an image to enhance' :
                    'Upload up to 4 style examples'}
                 </span>
                 <span className="text-xs text-zinc-400">JPG, PNG or WebP</span>
@@ -494,12 +522,12 @@ export default function StyleAnalyzer() {
             {analyzing ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                <span>{mode === 'single' ? 'Analyzing Style...' : mode === 'blueprint' ? 'Generating Blueprint...' : 'Extracting Essence...'}</span>
+                <span>{mode === 'single' ? 'Analyzing Style...' : mode === 'blueprint' ? 'Generating Blueprint...' : mode === 'enhance' ? 'Generating Enhanced Prompt...' : 'Extracting Essence...'}</span>
               </>
             ) : (
               <>
                 <Sparkles className="w-5 h-5" />
-                <span>{mode === 'single' ? 'Reverse Engineer Prompt' : mode === 'blueprint' ? 'Generate Photo Blueprint' : 'Extract Style Essence'}</span>
+                <span>{mode === 'single' ? 'Reverse Engineer Prompt' : mode === 'blueprint' ? 'Generate Photo Blueprint' : mode === 'enhance' ? 'Get Enhancement Prompt' : 'Extract Style Essence'}</span>
               </>
             )}
           </button>
@@ -510,7 +538,7 @@ export default function StyleAnalyzer() {
           <div className="h-full min-h-[300px] rounded-2xl bg-zinc-50 border border-zinc-200 p-6 relative flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold uppercase tracking-wider text-zinc-400">
-                {mode === 'blueprint' ? 'Technical Breakdown' : 'Generated Prompt'}
+                {mode === 'blueprint' ? 'Technical Breakdown' : mode === 'enhance' ? 'Enhancement Prompt' : 'Generated Prompt'}
               </h2>
               {prompt && mode !== 'blueprint' && (
                 <button 
