@@ -49,7 +49,6 @@ export default function StyleAnalyzer() {
   const [user, setUser] = useState<User | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
-  const [quotaError, setQuotaError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -61,7 +60,6 @@ export default function StyleAnalyzer() {
   useEffect(() => {
     if (!user) {
       setHistory([]);
-      setQuotaError(null);
       return;
     }
 
@@ -77,12 +75,8 @@ export default function StyleAnalyzer() {
         ...doc.data()
       })) as HistoryItem[];
       setHistory(items);
-      setQuotaError(null);
     }, (error) => {
       console.error("Firestore Error:", error);
-      if (error.message.includes('Quota exceeded')) {
-        setQuotaError("You have reached the daily Firestore read quota. History will be unavailable until the quota resets tomorrow.");
-      }
     });
 
     return () => unsubscribe();
@@ -390,19 +384,6 @@ export default function StyleAnalyzer() {
       </header>
 
       <AnimatePresence>
-        {quotaError && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="bg-amber-50 text-amber-800 p-4 rounded-xl text-sm border border-amber-200 mt-4 flex items-center justify-between"
-          >
-            <p>{quotaError}</p>
-            <button onClick={() => setQuotaError(null)} className="text-amber-500 hover:text-amber-700">
-              <LogOut className="w-4 h-4" />
-            </button>
-          </motion.div>
-        )}
         {showHistory && user && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}

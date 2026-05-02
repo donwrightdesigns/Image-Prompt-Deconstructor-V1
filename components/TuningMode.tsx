@@ -74,7 +74,7 @@ export default function TuningMode() {
           {
             parts: [
               { inlineData: { mimeType, data } },
-              { text: `Based on this image and the base prompt: "${basePrompt}", generate ${numVariations} different variation prompts. STRICTLY maintain architectural layout/structure of the original image, but explicitly experiment with the lighting, mood, color palette, or artistic style as requested by the base prompt. Return a JSON array of strings, where each string is a highly detailed prompt for an image generator.` }
+              { text: `consider what this professional photographers objective might be in crafting this prompt: "${basePrompt}", and generate ${numVariations} different variation prompts.` }
             ]
           }
         ],
@@ -95,7 +95,7 @@ export default function TuningMode() {
       
       const newVariations = promptList.slice(0, numVariations).map((prompt, i) => ({
         id: `var-${Date.now()}-${i}`,
-        prompt,
+        prompt: `${basePrompt} ${prompt}`,
         status: 'idle' as const,
         imageUrl: null
       }));
@@ -340,7 +340,7 @@ export default function TuningMode() {
           className="px-8 py-3 bg-zinc-900 text-white rounded-xl font-medium flex items-center space-x-2 disabled:opacity-50 hover:bg-zinc-800 transition-all shadow-lg active:scale-95 disabled:active:scale-100"
         >
           {isGeneratingAny ? <Loader2 className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
-          <span>{isGeneratingAny ? 'Processing...' : 'Process All Variations'}</span>
+          <span>{isGeneratingAny ? 'Processing...' : 'Generate ALL Images'}</span>
         </button>
       </div>}
 
