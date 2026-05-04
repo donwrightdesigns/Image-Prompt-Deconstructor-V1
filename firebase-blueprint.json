@@ -15,7 +15,7 @@
         },
         "mode": {
           "type": "string",
-          "enum": ["single", "essence"],
+          "enum": ["single", "essence", "blueprint", "enhance"],
           "description": "The mode used to generate the prompt."
         },
         "createdAt": {

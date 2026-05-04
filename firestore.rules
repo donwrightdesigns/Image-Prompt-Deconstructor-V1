@@ -1,80 +1,58 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ===============================================================
-    // Assumed Data Model
-    // ===============================================================
-    //
-    // Collection: prompts
-    // Document ID: auto-generated
-    // Fields:
-    //   - uid: string (required) - The user ID of the person who generated the prompt.
-    //   - prompt: string (required, max 10000 chars) - The generated AI prompt text.
-    //   - mode: string (required, 'single' or 'essence') - The mode used to generate the prompt.
-    //   - createdAt: timestamp (required) - The timestamp when the prompt was generated.
-    //   - thumbnailUrls: list (optional, max 4 items) - A list of thumbnail URLs for the images used.
-    //
-    // ===============================================================
+    // Allow public read/write for the optimizations collection (used by your other apps)
+    match /optimizations/{document=**} {
+      allow read, write: if true;
+    }
 
-    // ===============================================================
-    // Helper Functions
-    // ===============================================================
-    
-    function isAuthenticated() {
+    // ===================================
+    // Rules for Optic AI App
+    // ===================================
+
+    function isSignedIn() {
       return request.auth != null;
     }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
     }
-    
-    function isDocOwner() {
-      return isAuthenticated() && request.auth.uid == resource.data.uid;
-    }
-    
-    function uidUnchanged() {
-      return !('uid' in request.resource.data) ||
-        request.resource.data.uid == request.auth.uid;
-    }
-    
-    function hasRequiredFields(fields) {
-      return request.resource.data.keys().hasAll(fields);
-    }
-    
+
     function hasOnlyAllowedFields(fields) {
       return request.resource.data.keys().hasOnly(fields);
     }
 
-    // Domain Validator for PromptHistory
     function isValidPrompt(data) {
       return hasOnlyAllowedFields(['uid', 'prompt', 'mode', 'createdAt', 'thumbnailUrls']) &&
              data.uid is string && data.uid.size() > 0 &&
-             data.prompt is string && data.prompt.size() > 0 && data.prompt.size() <= 10000 &&
-             data.mode in ['single', 'essence'] &&
+             data.prompt is string && data.prompt.size() > 0 && data.prompt.size() <= 65000 &&
+             data.mode in ['single', 'essence', 'blueprint', 'enhance'] &&
              data.createdAt is timestamp &&
              (!('thumbnailUrls' in data) || (data.thumbnailUrls is list && data.thumbnailUrls.size() <= 4));
     }
 
-    // ===============================================================
-    // Collection Rules
-    // ===============================================================
-
+    // Prompt collection 
     match /prompts/{promptId} {
-      // Users can only read their own prompts
-      allow read: if isAuthenticated() && request.auth.uid == resource.data.uid;
+      // Users can read only their own prompts
+      allow read: if isOwner(resource.data.uid);
       
-      // Users can only create prompts for themselves
-      allow create: if isAuthenticated() && 
-                      isValidPrompt(request.resource.data) && 
-                      request.resource.data.uid == request.auth.uid;
+      // Users can create standard prompts 
+      allow create: if isOwner(request.resource.data.uid) 
+                    && isValidPrompt(request.resource.data) 
+                    && request.resource.data.createdAt == request.time;
       
-      // Prompts are immutable for now (no updates or deletes allowed by user)
-      allow update, delete: if false;
+      // Prompts are mostly immutable; no updates allowed
+      allow update: if false;
+      
+      // Users can delete their own prompts
+      allow delete: if isOwner(resource.data.uid);
     }
-
-    // Default deny
-    match /{path=**} {
+    
+    // Keep internal documents secure (Default Deny)
+    match /{document=**} {
       allow read, write: if false;
     }
   }
 }
+

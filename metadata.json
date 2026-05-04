@@ -1,5 +1,6 @@
 {
-  "name": "Deconstruct-a-Prompt",
-  "description": "Upload an image to reverse-engineer its visual style into a reusable AI prompt.",
-  "requestFramePermissions": []
+  "name": "Prompt-Lab-Pro-Photo",
+  "description": "Upload an image to reverse-engineer its visual style into a reusable AI prompt, or get a detailed explanation of how the photographer setup the image using googles GEMINI ",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
 }
